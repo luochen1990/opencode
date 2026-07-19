@@ -17,7 +17,7 @@ import {
 } from "@opencode-ai/core/v1/session"
 
 import { NamedError } from "@opencode-ai/core/util/error"
-import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
+import { APICallError, JSONParseError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { NotFoundError } from "@/storage/storage"
@@ -712,6 +712,36 @@ export function fromError(
           responseHeaders: parsed.responseHeaders,
           responseBody: parsed.responseBody,
           metadata: parsed.metadata,
+        },
+        { cause: e },
+      ).toObject()
+    // 瞬时错误重试: ai-sdk 在解析 SSE chunk 时 JSON 解析失败
+    // 通常因网关/代理把多个 SSE 响应流错误拼接, 或网络抖动导致 chunk 截断
+    // 原始损坏文本保留在 metadata.text 中, 便于诊断根因
+    case JSONParseError.isInstance(e):
+      return new APIError(
+        {
+          message: `Provider returned malformed JSON stream: ${e.message.slice(0, 200)}`,
+          isRetryable: true,
+          metadata: {
+            retry_source: "JSONParseError",
+            text: e.text.slice(0, 500),
+          },
+        },
+        { cause: e },
+      ).toObject()
+    // 瞬时错误重试: Bun fetch 的 TLS 证书验证失败
+    // Bun 抛出此错误时无更细粒度的 code/cause (文案来自 OpenSSL X509_verify_cert_error_string)
+    // 偶发可重试场景: 网络抖动导致 ServerHello 损坏 / OCSP 超时 / TLS 会话恢复失败等
+    case e instanceof Error && /unknown certificate verification/i.test(e.message):
+      return new APIError(
+        {
+          message: `TLS certificate verification failed: ${e.message}`,
+          isRetryable: true,
+          metadata: {
+            retry_source: "BunTLSVerification",
+            provider: ctx.providerID,
+          },
         },
         { cause: e },
       ).toObject()
