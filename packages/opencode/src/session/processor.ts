@@ -661,15 +661,26 @@ const layer = Layer.effect(
               SessionRetry.policy({
                 provider: input.model.providerID,
                 parse,
-                set: (info) => {
-                  return status.set(ctx.sessionID, {
-                    type: "retry",
-                    attempt: info.attempt,
-                    message: info.message,
-                    action: info.action,
-                    next: info.next,
-                  })
-                },
+                set: (info) =>
+                  Effect.gen(function* () {
+                    // 试用观察: 记录每次重试决策 (provider/session/attempt/message)
+                    // 配合 message-v2.ts 的 retry_source metadata 可定位是哪类瞬时错误
+                    yield* Effect.logInfo("retry", {
+                      "session.id": ctx.sessionID,
+                      provider: input.model.providerID,
+                      modelID: input.model.id,
+                      attempt: info.attempt,
+                      message: info.message,
+                      next: info.next,
+                    })
+                    yield* status.set(ctx.sessionID, {
+                      type: "retry",
+                      attempt: info.attempt,
+                      message: info.message,
+                      action: info.action,
+                      next: info.next,
+                    })
+                  }),
               }),
             ),
             Effect.catch(halt),

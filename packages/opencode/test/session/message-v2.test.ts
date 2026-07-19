@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { APICallError } from "ai"
+import { APICallError, JSONParseError } from "ai"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
@@ -1551,6 +1551,39 @@ describe("session.message-v2.fromError", () => {
     const result = MessageV2.fromError(zlibError, { providerID, aborted: true })
 
     expect(result.name).toBe("MessageAbortedError")
+  })
+
+  test("classifies JSONParseError (malformed SSE chunk) as retryable APIError", () => {
+    // 复现用户场景: provider 网关错误拼接两个 SSE chunk
+    // 真实损坏文本示例: '{"choices":[{"index":0data: {"id":"abc",...'
+    const parseError = new JSONParseError({
+      text: '{"choices":[{"index":0data: {"id":"abc","choices":[{"index":0,"delta":{}}]}',
+      cause: new SyntaxError("JSON Parse error: Expected '}'"),
+    })
+
+    const result = MessageV2.fromError(parseError, { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(true)
+    const apiError = result as SessionV1.APIError
+    expect(apiError.data.isRetryable).toBe(true)
+    expect(apiError.data.message).toInclude("malformed JSON stream")
+    expect(apiError.data.metadata?.retry_source).toBe("JSONParseError")
+    expect(apiError.data.metadata?.text).toInclude("data:")
+  })
+
+  test("classifies Bun fetch TLS verification error as retryable APIError", () => {
+    // 复现用户场景: Bun fetch 抛出的固定文案错误 (来自 OpenSSL X509_verify_cert_error_string)
+    // 通常由网络抖动 / OCSP 超时 / TLS 会话恢复失败等瞬时原因触发, 重试可恢复
+    const tlsError = new Error("unknown certificate verification error")
+
+    const result = MessageV2.fromError(tlsError, { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(true)
+    const apiError = result as SessionV1.APIError
+    expect(apiError.data.isRetryable).toBe(true)
+    expect(apiError.data.message).toInclude("TLS certificate verification failed")
+    expect(apiError.data.metadata?.retry_source).toBe("BunTLSVerification")
+    expect(apiError.data.metadata?.provider).toBe(String(providerID))
   })
 })
 
