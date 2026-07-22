@@ -613,14 +613,15 @@ export function Session() {
         const revert = session()?.revert?.messageID
         const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
         if (!message) return
-        void sdk.client.session
-          .revert({
-            sessionID: route.sessionID,
-            messageID: message.id,
-          })
-          .then(() => {
-            toBottom()
-          })
+        dialog.clear()
+        // 等待 revert 完成后再恢复输入框文本，避免 rollback 尚未结算时用户按 Enter
+        // 把新消息错误地附加到被回退的范围上。
+        const result = await sdk.client.session.revert({
+          sessionID: route.sessionID,
+          messageID: message.id,
+        })
+        if (!result.data) return
+        toBottom()
         const parts = sync.data.part[message.id]
         prompt?.set(
           parts.reduce(
@@ -634,7 +635,6 @@ export function Session() {
             { input: "", parts: [] as PromptInfo["parts"] },
           ),
         )
-        dialog.clear()
       },
     },
     {
@@ -645,19 +645,19 @@ export function Session() {
       slash: {
         name: "redo",
       },
-      run: () => {
+      run: async () => {
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return
         const message = messages().find((x) => x.role === "user" && x.id > messageID)
         if (!message) {
-          void sdk.client.session.unrevert({
+          await sdk.client.session.unrevert({
             sessionID: route.sessionID,
           })
           prompt?.set({ input: "", parts: [] })
           return
         }
-        void sdk.client.session.revert({
+        await sdk.client.session.revert({
           sessionID: route.sessionID,
           messageID: message.id,
         })

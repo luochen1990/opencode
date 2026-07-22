@@ -26,14 +26,20 @@ export function DialogMessage(props: {
           title: "Revert",
           value: "session.revert",
           description: "undo messages and file changes",
-          onSelect: (dialog) => {
+          onSelect: async (dialog) => {
             const msg = message()
             if (!msg) return
 
-            void sdk.client.session.revert({
+            // 先关闭对话框（与原版同步行为一致），避免 await 期间用户重复触发。
+            dialog.clear()
+
+            // 等待 revert 请求完成后再恢复输入框文本，避免在 rollback 尚未结算时
+            // 文本就出现在输入框，导致用户按下 Enter 后新消息错误地附加到被回退的范围上。
+            const result = await sdk.client.session.revert({
               sessionID: props.sessionID,
               messageID: msg.id,
             })
+            if (!result.data) return
 
             if (props.setPrompt) {
               const parts = sync.data.part[msg.id]
@@ -49,8 +55,6 @@ export function DialogMessage(props: {
               )
               props.setPrompt(promptInfo)
             }
-
-            dialog.clear()
           },
         },
         {
