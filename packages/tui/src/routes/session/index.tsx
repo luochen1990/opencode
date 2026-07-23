@@ -1260,6 +1260,7 @@ export function Session() {
                                 messageID={message.id}
                                 sessionID={route.sessionID}
                                 setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                pending={pending()}
                               />
                             ))
                           }}
